@@ -1,0 +1,201 @@
+# Jenkins Configuration as Code (JCasC) for F1 Data Platform
+
+jenkins:
+  systemMessage: "F1 Data Platform CI/CD Jenkins Controller"
+  numExecutors: 2
+  mode: NORMAL
+  
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "AWS_DEFAULT_REGION"
+            value: "us-east-1"
+          - key: "DOCKER_REGISTRY"
+            value: "${DOCKER_REGISTRY:-docker.io}"
+          - key: "F1_APP_NAME"
+            value: "f1-data-platform"
+          - key: "SLACK_CHANNEL"
+            value: "#f1-deployments"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          # AWS Credentials
+          - awsCredentialsImpl:
+              scope: GLOBAL
+              id: "aws-credentials"
+              description: "AWS Access Key for F1 Data Platform"
+              accessKey: "${AWS_ACCESS_KEY_ID}"
+              secretKey: "${AWS_SECRET_ACCESS_KEY}"
+          
+          # Docker Registry
+          - usernamePassword:
+              scope: GLOBAL
+              id: "docker-registry-credentials"
+              description: "Docker Registry Credentials"
+              username: "${DOCKER_USERNAME}"
+              password: "${DOCKER_PASSWORD}"
+          
+          # GitHub Token
+          - string:
+              scope: GLOBAL
+              id: "github-token"
+              description: "GitHub Personal Access Token"
+              secret: "${GITHUB_TOKEN}"
+          
+          # Slack Webhook
+          - string:
+              scope: GLOBAL
+              id: "slack-webhook"
+              description: "Slack Webhook URL"
+              secret: "${SLACK_WEBHOOK_URL}"
+          
+          # SonarQube Token
+          - string:
+              scope: GLOBAL
+              id: "sonarqube-token"
+              description: "SonarQube Authentication Token"
+              secret: "${SONARQUBE_TOKEN}"
+
+tool:
+  git:
+    installations:
+      - name: "Default"
+        home: "git"
+  
+  terraform:
+    installations:
+      - name: "terraform"
+        properties:
+          - installSource:
+              installers:
+                - terraformInstaller:
+                    id: "1.5.7"
+  
+  dockerTool:
+    installations:
+      - name: "docker"
+        properties:
+          - installSource:
+              installers:
+                - dockerInstaller:
+                    version: "latest"
+
+unclassified:
+  location:
+    url: "${JENKINS_URL}"
+    adminAddress: "admin@company.com"
+  
+  slackNotifier:
+    botUser: true
+    sendAsText: false
+    teamDomain: "${SLACK_TEAM_DOMAIN}"
+    token: "${SLACK_BOT_TOKEN}"
+  
+  sonarGlobalConfiguration:
+    installations:
+      - name: "SonarQube"
+        serverUrl: "${SONARQUBE_URL}"
+        credentialsId: "sonarqube-token"
+  
+  globalLibraries:
+    libraries:
+      - name: "f1-shared-library"
+        defaultVersion: "main"
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "https://github.com/yourusername/f1-data-platform-gitops.git"
+                credentialsId: "github-token"
+
+jobs:
+  - script: |
+      multibranchPipelineJob('f1-data-platform') {
+        displayName('F1 Data Platform')
+        description('Multi-cloud F1 data platform CI/CD pipeline')
+        
+        branchSources {
+          github {
+            id('f1-data-platform')
+            scanCredentialsId('github-token')
+            repoOwner('yourusername')
+            repository('f1-data-platform-gitops')
+            buildOriginBranch(true)
+            buildOriginBranchWithPR(true)
+            buildOriginPRMerge(false)
+            buildOriginPRHead(true)
+            buildForkPRMerge(false)
+            buildForkPRHead(false)
+          }
+        }
+        
+        sources {
+          branchSource {
+            source {
+              github {
+                credentialsId('github-token')
+                repoOwner('yourusername')
+                repository('f1-data-platform-gitops')
+                traits {
+                  gitHubBranchDiscovery {
+                    strategyId(1)
+                  }
+                  gitHubPullRequestDiscovery {
+                    strategyId(1)
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        factory {
+          workflowBranchProjectFactory {
+            scriptPath('jenkins/Jenkinsfile')
+          }
+        }
+        
+        triggers {
+          githubPush()
+          periodic(5)
+        }
+        
+        orphanedItemStrategy {
+          discardOldItems {
+            numToKeep(20)
+          }
+        }
+      }
+  
+  - script: |
+      pipelineJob('f1-infrastructure-deployment') {
+        displayName('F1 Infrastructure Deployment')
+        description('Deploy F1 Data Platform infrastructure')
+        
+        parameters {
+          choiceParam('ENVIRONMENT', ['dev', 'staging', 'prod'], 'Target environment')
+          choiceParam('ACTION', ['plan', 'apply', 'destroy'], 'Terraform action')
+          booleanParam('AUTO_APPROVE', false, 'Auto-approve Terraform changes')
+        }
+        
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/yourusername/f1-data-platform-gitops.git')
+                  credentials('github-token')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('jenkins/Jenkinsfile.infrastructure')
+          }
+        }
+        
+        triggers {
+          cron('H 2 * * 0')  # Weekly infrastructure validation
+        }
+      }

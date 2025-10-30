@@ -1,0 +1,346 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'F1 Data Platform - Glue ETL Jobs and Athena Analytics'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: f1-data-platform
+    Description: Project name for resource naming
+  
+  FoundationStackName:
+    Type: String
+    Description: Name of the foundation stack (for cross-stack references)
+  
+  GlueJobMaxCapacity:
+    Type: Number
+    Default: 2
+    Description: Maximum DPU capacity for Glue jobs
+  
+  GlueWorkerType:
+    Type: String
+    Default: Standard
+    AllowedValues: [Standard, G.1X, G.2X]
+    Description: Glue worker type
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, prod]
+
+Resources:
+  # Glue Catalog Database
+  F1Database:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub '${ProjectName}_${Environment}'
+        Description: !Sub 'F1 Data Platform catalog database for ${Environment}'
+
+  # Glue Crawler for F1 data
+  F1DataCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-data-crawler'
+      Role: 
+        Fn::ImportValue: !Sub '${FoundationStackName}-GlueServiceRole'
+      DatabaseName: !Ref F1Database
+      Targets:
+        S3Targets:
+          - Path: !Sub
+              - 's3://${BucketName}/raw-data/'
+              - BucketName:
+                  Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+          - Path: !Sub
+              - 's3://${BucketName}/processed-data/'
+              - BucketName:
+                  Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": { "AddOrUpdateBehavior": "InheritFromTable" },
+            "Tables": { "AddOrUpdateBehavior": "MergeNewColumns" }
+          }
+        }
+      Tags:
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
+        ManagedBy: CloudFormation
+
+  # Glue ETL Job for F1 data processing
+  F1ETLJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-etl-job'
+      Role: 
+        Fn::ImportValue: !Sub '${FoundationStackName}-GlueServiceRole'
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub
+          - 's3://${BucketName}/scripts/f1_etl_job.py'
+          - BucketName:
+              Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+        PythonVersion: '3'
+      DefaultArguments:
+        '--job-language': python
+        '--job-bookmark-option': job-bookmark-enable
+        '--enable-metrics': 'true'
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-spark-ui': 'true'
+        '--spark-event-logs-path': !Sub
+          - 's3://${BucketName}/sparkHistoryLogs/'
+          - BucketName:
+              Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+        '--TempDir': !Sub
+          - 's3://${BucketName}/temp/'
+          - BucketName:
+              Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+        '--environment': !Ref Environment
+        '--source-bucket': 
+          Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+        '--target-bucket': 
+          Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+      GlueVersion: '4.0'
+      MaxCapacity: !Ref GlueJobMaxCapacity
+      WorkerType: !Ref GlueWorkerType
+      NumberOfWorkers: !If [IsProduction, 10, 2]
+      Timeout: 60  # minutes
+      Tags:
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
+        ManagedBy: CloudFormation
+
+  # Athena Workgroup for F1 Analytics
+  F1AnalyticsWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-analytics'
+      Description: F1 Data Platform analytics workgroup
+      State: ENABLED
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetrics: true
+        ResultConfiguration:
+          OutputLocation: !Sub
+            - 's3://${BucketName}/athena-results/'
+            - BucketName:
+                Fn::ImportValue: !Sub '${FoundationStackName}-DataLakeBucket'
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Athena Named Queries for common F1 analytics
+  F1DriversQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-drivers-analysis'
+      Description: 'Query to analyze F1 drivers performance'
+      Database: !Ref F1Database
+      QueryString: !Sub |
+        -- F1 Drivers Performance Analysis
+        SELECT 
+          driver_name,
+          COUNT(*) as total_races,
+          AVG(finishing_position) as avg_position,
+          COUNT(CASE WHEN finishing_position = 1 THEN 1 END) as wins,
+          COUNT(CASE WHEN finishing_position <= 3 THEN 1 END) as podiums
+        FROM f1_drivers_recent
+        WHERE year = YEAR(CURRENT_DATE)
+        GROUP BY driver_name
+        ORDER BY wins DESC, avg_position ASC;
+      WorkGroup: !Ref F1AnalyticsWorkgroup
+
+  F1TeamsQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-teams-analysis'
+      Description: 'Query to analyze F1 teams performance'
+      Database: !Ref F1Database
+      QueryString: !Sub |
+        -- F1 Teams Performance Analysis
+        SELECT 
+          team_name,
+          COUNT(*) as total_entries,
+          AVG(points) as avg_points_per_race,
+          SUM(points) as total_points,
+          COUNT(CASE WHEN finishing_position = 1 THEN 1 END) as wins
+        FROM f1_teams
+        WHERE year = YEAR(CURRENT_DATE)
+        GROUP BY team_name
+        ORDER BY total_points DESC;
+      WorkGroup: !Ref F1AnalyticsWorkgroup
+
+  F1LapTimesQuery:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-lap-times-analysis'
+      Description: 'Query to analyze F1 lap times and performance'
+      Database: !Ref F1Database
+      QueryString: !Sub |
+        -- F1 Lap Times Analysis
+        SELECT 
+          driver_name,
+          circuit_name,
+          MIN(lap_time) as fastest_lap,
+          AVG(lap_time) as avg_lap_time,
+          COUNT(*) as total_laps
+        FROM f1_laps_recent
+        WHERE lap_time IS NOT NULL
+        GROUP BY driver_name, circuit_name
+        HAVING total_laps > 10
+        ORDER BY fastest_lap ASC;
+      WorkGroup: !Ref F1AnalyticsWorkgroup
+
+  # CloudWatch Dashboard for Glue and Athena
+  F1AnalyticsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${ProjectName}-${Environment}-analytics'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/Glue", "glue.driver.aggregate.numCompletedTasks", "JobName", "${F1ETLJob}"],
+                  [".", "glue.driver.aggregate.numFailedTasks", ".", "."],
+                  [".", "glue.driver.jvm.heap.usage", ".", "."]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Glue ETL Job Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/Athena", "DataScannedInBytes", "WorkGroup", "${F1AnalyticsWorkgroup}"],
+                  [".", "QueryExecutionTime", ".", "."],
+                  [".", "EngineExecutionTime", ".", "."]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Athena Query Performance",
+                "period": 300
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 12,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/glue/${F1ETLJob}'\n| fields @timestamp, @message\n| filter @message like /ERROR/\n| sort @timestamp desc\n| limit 100",
+                "region": "${AWS::Region}",
+                "title": "Glue Job Errors",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+  # CloudWatch Alarms for Glue Job failures
+  GlueJobFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-glue-job-failures'
+      AlarmDescription: Monitor Glue ETL job failures
+      MetricName: glue.driver.aggregate.numFailedTasks
+      Namespace: AWS/Glue
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: JobName
+          Value: !Ref F1ETLJob
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${FoundationStackName}-AlertsTopic'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # CloudWatch Alarm for Athena query failures
+  AthenaQueryFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-athena-query-failures'
+      AlarmDescription: Monitor Athena query failures
+      MetricName: FailedExecutionCount
+      Namespace: AWS/Athena
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: WorkGroup
+          Value: !Ref F1AnalyticsWorkgroup
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${FoundationStackName}-AlertsTopic'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  GlueDatabaseName:
+    Description: Name of the Glue catalog database
+    Value: !Ref F1Database
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueDatabase'
+
+  GlueCrawlerName:
+    Description: Name of the Glue crawler
+    Value: !Ref F1DataCrawler
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueCrawler'
+
+  GlueETLJobName:
+    Description: Name of the Glue ETL job
+    Value: !Ref F1ETLJob
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueETLJob'
+
+  AthenaWorkgroupName:
+    Description: Name of the Athena workgroup
+    Value: !Ref F1AnalyticsWorkgroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AthenaWorkgroup'
+
+  CloudWatchDashboardURL:
+    Description: URL of the CloudWatch dashboard
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${F1AnalyticsDashboard}'
+
+  AthenaWorkgroupURL:
+    Description: URL to access Athena workgroup
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/athena/home?region=${AWS::Region}#query-editor/workgroup/${F1AnalyticsWorkgroup}'

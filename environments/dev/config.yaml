@@ -1,0 +1,74 @@
+# F1 Data Platform - Development Environment Configuration
+
+environment:
+  name: "dev"
+  cloud_provider: "aws"
+  region: "us-east-1"
+  
+application:
+  name: "f1-data-platform"
+  version: "latest"
+  log_level: "DEBUG"
+  
+aws:
+  account_id: "${AWS_ACCOUNT_ID}"
+  region: "us-east-1"
+  
+  # Data Lake Configuration
+  data_lake:
+    bucket_name: "f1-data-lake-dev-${AWS_ACCOUNT_ID}"
+    raw_data_prefix: "raw-data/"
+    processed_data_prefix: "processed-data/"
+    analytics_prefix: "analytics/"
+  
+  # Glue Configuration
+  glue:
+    database_name: "f1_data_dev"
+    crawler_name: "f1-data-crawler-dev"
+    job_name: "f1-etl-job-dev"
+    script_location: "s3://f1-data-lake-dev-${AWS_ACCOUNT_ID}/scripts/"
+  
+  # Athena Configuration
+  athena:
+    workgroup: "f1-analytics-dev"
+    query_results_location: "s3://f1-data-lake-dev-${AWS_ACCOUNT_ID}/athena-results/"
+  
+  # Lambda Configuration
+  lambda:
+    runtime: "python3.9"
+    timeout: 300
+    memory_size: 512
+    functions:
+      - name: "f1-data-processor-dev"
+        handler: "lambda_function.lambda_handler"
+      - name: "f1-data-scheduler-dev"
+        handler: "scheduler.lambda_handler"
+  
+  # VPC Configuration (optional)
+  vpc:
+    create_vpc: false
+    vpc_id: ""
+    subnet_ids: []
+  
+# Resource Tags
+tags:
+  Environment: "dev"
+  Project: "f1-data-platform"
+  Owner: "data-engineering-team"
+  CostCenter: "engineering"
+  ManagedBy: "terraform"
+
+# Feature Flags
+features:
+  enable_monitoring: true
+  enable_encryption: true
+  enable_backup: false
+  enable_multi_az: false
+  
+# Scaling Configuration
+scaling:
+  lambda:
+    concurrent_executions: 10
+  glue:
+    max_capacity: 2
+    worker_type: "Standard"

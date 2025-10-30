@@ -1,0 +1,74 @@
+# F1 Data Platform - Staging Environment Configuration
+
+environment:
+  name: "staging"
+  cloud_provider: "aws"
+  region: "us-east-1"
+  
+application:
+  name: "f1-data-platform"
+  version: "latest"
+  log_level: "INFO"
+  
+aws:
+  account_id: "${AWS_ACCOUNT_ID}"
+  region: "us-east-1"
+  
+  # Data Lake Configuration
+  data_lake:
+    bucket_name: "f1-data-lake-staging-${AWS_ACCOUNT_ID}"
+    raw_data_prefix: "raw-data/"
+    processed_data_prefix: "processed-data/"
+    analytics_prefix: "analytics/"
+  
+  # Glue Configuration
+  glue:
+    database_name: "f1_data_staging"
+    crawler_name: "f1-data-crawler-staging"
+    job_name: "f1-etl-job-staging"
+    script_location: "s3://f1-data-lake-staging-${AWS_ACCOUNT_ID}/scripts/"
+  
+  # Athena Configuration
+  athena:
+    workgroup: "f1-analytics-staging"
+    query_results_location: "s3://f1-data-lake-staging-${AWS_ACCOUNT_ID}/athena-results/"
+  
+  # Lambda Configuration
+  lambda:
+    runtime: "python3.9"
+    timeout: 600
+    memory_size: 1024
+    functions:
+      - name: "f1-data-processor-staging"
+        handler: "lambda_function.lambda_handler"
+      - name: "f1-data-scheduler-staging"
+        handler: "scheduler.lambda_handler"
+  
+  # VPC Configuration
+  vpc:
+    create_vpc: true
+    vpc_id: ""
+    subnet_ids: []
+  
+# Resource Tags
+tags:
+  Environment: "staging"
+  Project: "f1-data-platform"
+  Owner: "data-engineering-team"
+  CostCenter: "engineering"
+  ManagedBy: "terraform"
+
+# Feature Flags
+features:
+  enable_monitoring: true
+  enable_encryption: true
+  enable_backup: true
+  enable_multi_az: false
+  
+# Scaling Configuration
+scaling:
+  lambda:
+    concurrent_executions: 50
+  glue:
+    max_capacity: 10
+    worker_type: "Standard"

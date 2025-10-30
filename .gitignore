@@ -1,0 +1,17 @@
+﻿
+# Migration backups
+backup-migration-*/
+
+# Local documentation (not for version control)
+docs-local/
+docs/docs-local/
+**/docs-local/
+
+# Environment-specific secrets
+environments/*/secrets.yaml
+*.secret.yaml
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+.terraform/

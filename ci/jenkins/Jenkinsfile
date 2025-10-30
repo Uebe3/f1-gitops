@@ -1,0 +1,577 @@
+#!/usr/bin/env groovy
+
+/**
+ * Jenkins Pipeline for F1 Data Platform
+ * 
+ * Configuration-driven CI/CD pipeline that reads deployment settings
+ * from the source repository and deploys to the specified cloud provider.
+ */
+
+pipeline {
+    agent {
+        kubernetes {
+            yamlFile 'jenkins/pod-templates/build-pod.yaml'
+        }
+    }
+    
+    environment {
+        // Application Configuration (will be overridden by config file)
+        APP_NAME = 'f1-data-platform'
+        BUILD_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(8)}"
+        DOCKER_IMAGE = "${env.DOCKER_REGISTRY}/${APP_NAME}:${BUILD_VERSION}"
+        
+        // Default Configuration (will be overridden by parsed config)
+        ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
+        CLOUD_PROVIDER = 'aws'  // Default, will be set from config
+        
+        // Quality Gates
+        SONAR_PROJECT_KEY = 'f1-data-platform'
+        COVERAGE_THRESHOLD = '80'
+        
+        // Notification Configuration
+        SLACK_CHANNEL = '#f1-deployments'
+        TEAMS_WEBHOOK = credentials('teams-webhook')
+    }
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target deployment environment'
+        )
+        string(
+            name: 'CONFIG_FILE',
+            defaultValue: 'config/config.yaml',
+            description: 'Path to application configuration file'
+        )
+        booleanParam(
+            name: 'FORCE_CLOUD_PROVIDER',
+            defaultValue: false,
+            description: 'Override cloud provider from config file'
+        )
+        choice(
+            name: 'OVERRIDE_CLOUD_PROVIDER',
+            choices: ['', 'aws', 'azure', 'gcp'],
+            description: 'Cloud provider override (if FORCE_CLOUD_PROVIDER is true)'
+        )
+        booleanParam(
+            name: 'RUN_INTEGRATION_TESTS',
+            defaultValue: true,
+            description: 'Run integration tests after deployment'
+        )
+        booleanParam(
+            name: 'SKIP_SECURITY_SCAN',
+            defaultValue: false,
+            description: 'Skip security scanning (emergency deployments only)'
+        )
+        booleanParam(
+            name: 'AUTO_APPROVE_INFRASTRUCTURE',
+            defaultValue: false,
+            description: 'Auto-approve infrastructure changes (use with caution)'
+        )
+        string(
+            name: 'SLACK_CHANNEL',
+            defaultValue: '#f1-deployments',
+            description: 'Slack channel for notifications'
+        )
+    }
+    
+    options {
+        // Build options
+        buildDiscarder(logRotator(numToKeepStr: '50'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        
+        // Parallel execution
+        parallelsAlwaysFailFast()
+        
+        // Skip builds if another is running
+        skipDefaultCheckout()
+        disableConcurrentBuilds()
+    }
+    
+    triggers {
+        // Trigger on code changes
+        githubPush()
+        
+        // Nightly builds for staging
+        cron(env.BRANCH_NAME == 'main' ? 'H 2 * * *' : '')
+    }
+    
+    stages {
+        stage('📋 Initialize & Parse Configuration') {
+            steps {
+                script {
+                    // Checkout source code
+                    checkout scm
+                    
+                    // Load pipeline libraries
+                    configParser = load 'jenkins/shared-libraries/configParser.groovy'
+                    cloudProvider = load 'jenkins/shared-libraries/cloudProvider.groovy'
+                    testRunner = load 'jenkins/shared-libraries/testRunner.groovy'
+                    notifier = load 'jenkins/shared-libraries/notificationHelper.groovy'
+                    
+                    // Parse application configuration
+                    echo "📋 Parsing application configuration..."
+                    appConfig = configParser.parseApplicationConfig(params.CONFIG_FILE)
+                    
+                    // Override cloud provider if specified
+                    if (params.FORCE_CLOUD_PROVIDER && params.OVERRIDE_CLOUD_PROVIDER) {
+                        echo "🔄 Overriding cloud provider: ${appConfig.cloud_provider} → ${params.OVERRIDE_CLOUD_PROVIDER}"
+                        appConfig.cloud_provider = params.OVERRIDE_CLOUD_PROVIDER
+                    }
+                    
+                    // Set environment variables based on config
+                    env.CLOUD_PROVIDER = appConfig.cloud_provider
+                    env.APP_NAME = appConfig.application?.name ?: 'f1-data-platform'
+                    
+                    // Load cloud-specific configuration
+                    cloudConfig = configParser.getCloudConfig(appConfig, params.ENVIRONMENT)
+                    
+                    // Load infrastructure configuration
+                    infraConfig = configParser.getInfrastructureConfig(appConfig, params.ENVIRONMENT)
+                    
+                    // Generate deployment manifest
+                    deploymentManifest = configParser.generateDeploymentManifest(
+                        appConfig, cloudConfig, infraConfig, params.ENVIRONMENT
+                    )
+                    
+                    // Validate deployment compatibility
+                    configParser.validateDeploymentCompatibility(deploymentManifest)
+                    
+                    // Create configuration report
+                    configParser.createConfigurationReport(
+                        appConfig, cloudConfig, infraConfig, params.ENVIRONMENT
+                    )
+                    
+                    // Send start notification
+                    notifier.notifyBuildStart([
+                        message: "🚀 Starting F1 Pipeline deployment to ${params.ENVIRONMENT} on ${env.CLOUD_PROVIDER}",
+                        slackChannel: params.SLACK_CHANNEL
+                    ])
+                    
+                    // Display build information
+                    echo """
+                    🏎️ F1 Data Platform Pipeline - Configuration Driven
+                    ═══════════════════════════════════════════════════
+                    📦 Version: ${BUILD_VERSION}
+                    🌍 Environment: ${params.ENVIRONMENT}
+                    ☁️  Cloud Provider: ${env.CLOUD_PROVIDER}
+                    🏗️  Infrastructure: ${infraConfig.source}
+                    🧪 Integration Tests: ${params.RUN_INTEGRATION_TESTS}
+                    🔒 Security Scan: ${!params.SKIP_SECURITY_SCAN}
+                    📱 Slack: ${params.SLACK_CHANNEL}
+                    """
+                }
+            }
+        }
+        
+        stage('🔍 Code Quality & Security') {
+            parallel {
+                stage('📊 SonarQube Analysis') {
+                    when {
+                        not { params.SKIP_SECURITY_SCAN }
+                    }
+                    steps {
+                        container('sonar') {
+                            withSonarQubeEnv('SonarQube') {
+                                sh """
+                                sonar-scanner \
+                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName='F1 Data Platform' \
+                                    -Dsonar.projectVersion=${BUILD_VERSION} \
+                                    -Dsonar.sources=f1_data_platform \
+                                    -Dsonar.tests=tests \
+                                    -Dsonar.python.coverage.reportPaths=coverage.xml \
+                                    -Dsonar.python.xunit.reportPath=test-results.xml
+                                """
+                            }
+                            
+                            // Wait for quality gate
+                            script {
+                                def qg = waitForQualityGate()
+                                if (qg.status != 'OK') {
+                                    error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('🔒 Security Scan') {
+                    when {
+                        not { params.SKIP_SECURITY_SCAN }
+                    }
+                    steps {
+                        container('security') {
+                            // Dependency vulnerability scanning
+                            sh 'safety check --json --output safety-report.json || true'
+                            
+                            // Secret detection
+                            sh 'truffleHog --json --regex . > trufflehog-report.json || true'
+                            
+                            // SAST scanning
+                            sh 'bandit -r f1_data_platform -f json -o bandit-report.json || true'
+                            
+                            // Publish security reports
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: false,
+                                keepAll: true,
+                                reportDir: '.',
+                                reportFiles: 'security-report.html',
+                                reportName: 'Security Scan Report'
+                            ])
+                        }
+                    }
+                }
+                
+                stage('📝 Lint & Format Check') {
+                    steps {
+                        container('python') {
+                            sh '''
+                            # Python linting
+                            flake8 f1_data_platform tests --count --select=E9,F63,F7,F82 --show-source --statistics
+                            
+                            # Type checking
+                            mypy f1_data_platform --ignore-missing-imports
+                            
+                            # Code formatting check
+                            black --check f1_data_platform tests
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Testing') {
+            parallel {
+                stage('⚡ Unit Tests') {
+                    steps {
+                        container('python') {
+                            sh '''
+                            # Install dependencies
+                            pip install -r requirements.txt
+                            pip install pytest pytest-cov pytest-xdist
+                            
+                            # Run unit tests with coverage
+                            pytest tests/unit/ \
+                                --cov=f1_data_platform \
+                                --cov-report=xml:coverage.xml \
+                                --cov-report=html:htmlcov \
+                                --junitxml=test-results.xml \
+                                --verbose \
+                                -n auto
+                            
+                            # Check coverage threshold
+                            coverage report --fail-under=${env.COVERAGE_THRESHOLD}
+                            '''
+                            
+                            // Publish test results
+                            publishTestResults testResultsPattern: 'test-results.xml'
+                            publishCoverageResults([
+                                [
+                                    path: 'coverage.xml',
+                                    reportFiles: 'coverage.xml',
+                                    reportName: 'Coverage Report'
+                                ]
+                            ])
+                        }
+                    }
+                }
+                
+                stage('🔗 Integration Tests') {
+                    steps {
+                        container('python') {
+                            sh '''
+                            # Run integration tests
+                            pytest tests/integration/ \
+                                --junitxml=integration-results.xml \
+                                --verbose
+                            '''
+                            
+                            publishTestResults testResultsPattern: 'integration-results.xml'
+                        }
+                    }
+                }
+                
+                stage('☁️ Cloud Swap Tests') {
+                    steps {
+                        container('python') {
+                            sh '''
+                            # Test cloud provider switching
+                            python tests/test_cloud_swap_integration.py
+                            
+                            # Test configuration loading
+                            python -c "
+                            from f1_data_platform.config.settings import Settings
+                            
+                            # Test each cloud config
+                            for cloud in ['aws', 'azure', 'gcp']:
+                                config_file = f'config/{cloud}.example.yaml'
+                                settings = Settings.load_from_file(config_file)
+                                print(f'✅ {cloud} config loaded successfully')
+                                assert settings.environment == cloud
+                            print('✅ All cloud configurations valid')
+                            "
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('📦 Build & Package') {
+            steps {
+                container('docker') {
+                    script {
+                        // Build Docker image
+                        sh """
+                        docker build \
+                            --build-arg BUILD_VERSION=${BUILD_VERSION} \
+                            --build-arg GIT_COMMIT=${env.GIT_COMMIT} \
+                            --tag ${env.DOCKER_IMAGE} \
+                            --tag ${env.DOCKER_REGISTRY}/${APP_NAME}:latest \
+                            .
+                        """
+                        
+                        // Security scan of Docker image
+                        if (!params.SKIP_SECURITY_SCAN) {
+                            sh "trivy image --exit-code 0 --severity HIGH,CRITICAL ${env.DOCKER_IMAGE}"
+                        }
+                        
+                        // Push to registry
+                        withCredentials([usernamePassword(
+                            credentialsId: 'docker-registry-credentials',
+                            usernameVariable: 'DOCKER_USERNAME',
+                            passwordVariable: 'DOCKER_PASSWORD'
+                        )]) {
+                            sh """
+                            echo \$DOCKER_PASSWORD | docker login ${env.DOCKER_REGISTRY} -u \$DOCKER_USERNAME --password-stdin
+                            docker push ${env.DOCKER_IMAGE}
+                            docker push ${env.DOCKER_REGISTRY}/${APP_NAME}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Cloud Deployment') {
+            steps {
+                script {
+                    echo "☁️ Deploying to ${env.CLOUD_PROVIDER}..."
+                    
+                    // Deploy based on configured cloud provider
+                    switch(env.CLOUD_PROVIDER) {
+                        case 'aws':
+                            cloudProvider.deployToAWS([
+                                environment: params.ENVIRONMENT,
+                                version: BUILD_VERSION,
+                                dockerImage: env.DOCKER_IMAGE,
+                                config: cloudConfig,
+                                infraConfig: infraConfig,
+                                manifest: deploymentManifest
+                            ])
+                            break
+                            
+                        case 'azure':
+                            cloudProvider.deployToAzure([
+                                environment: params.ENVIRONMENT,
+                                version: BUILD_VERSION,
+                                dockerImage: env.DOCKER_IMAGE,
+                                config: cloudConfig,
+                                infraConfig: infraConfig,
+                                manifest: deploymentManifest
+                            ])
+                            break
+                            
+                        case 'gcp':
+                            cloudProvider.deployToGCP([
+                                environment: params.ENVIRONMENT,
+                                version: BUILD_VERSION,
+                                dockerImage: env.DOCKER_IMAGE,
+                                config: cloudConfig,
+                                infraConfig: infraConfig,
+                                manifest: deploymentManifest
+                            ])
+                            break
+                            
+                        default:
+                            error "Unsupported cloud provider: ${env.CLOUD_PROVIDER}"
+                    }
+                }
+            }
+        }
+        
+        stage('🔍 Post-Deployment Testing') {
+            when {
+                expression { params.RUN_INTEGRATION_TESTS }
+            }
+            parallel {
+                stage('🏥 Health Checks') {
+                    steps {
+                        script {
+                            testRunner.runHealthChecks([
+                                clouds: [env.CLOUD_PROVIDER],
+                                environment: params.ENVIRONMENT,
+                                config: cloudConfig
+                            ])
+                        }
+                    }
+                }
+                
+                stage('🧪 Smoke Tests') {
+                    steps {
+                        script {
+                            testRunner.runSmokeTests([
+                                clouds: [env.CLOUD_PROVIDER],
+                                environment: params.ENVIRONMENT,
+                                config: cloudConfig
+                            ])
+                        }
+                    }
+                }
+                
+                stage('📊 Performance Tests') {
+                    steps {
+                        script {
+                            testRunner.runPerformanceTests([
+                                clouds: [env.CLOUD_PROVIDER],
+                                environment: params.ENVIRONMENT,
+                                config: cloudConfig
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('📈 Monitoring Setup') {
+            steps {
+                script {
+                    // Setup monitoring and alerting
+                    cloudProvider.setupMonitoring([
+                        clouds: [env.CLOUD_PROVIDER],
+                        environment: params.ENVIRONMENT,
+                        slackChannel: params.SLACK_CHANNEL,
+                        config: cloudConfig,
+                        manifest: deploymentManifest
+                    ])
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Archive artifacts
+                archiveArtifacts artifacts: '''
+                    **/*.log,
+                    **/*-report.json,
+                    **/*-report.html,
+                    coverage.xml,
+                    test-results.xml
+                ''', allowEmptyArchive: true
+                
+                // Cleanup Docker images
+                sh "docker rmi ${env.DOCKER_IMAGE} || true"
+                sh "docker system prune -f || true"
+            }
+        }
+        
+        success {
+            script {
+                notifier.notifyBuildSuccess([
+                    message: """
+                    ✅ F1 Pipeline SUCCESS! 🏎️
+                    
+                    📦 Version: ${BUILD_VERSION}
+                    🌍 Environment: ${params.ENVIRONMENT}
+                    ☁️  Deployed to: ${env.CLOUD_PROVIDER}
+                    🏗️  Infrastructure: ${infraConfig?.source ?: 'unknown'}
+                    ⏱️  Duration: ${currentBuild.durationString}
+                    
+                    🔗 [Build Details](${env.BUILD_URL})
+                    """,
+                    slackChannel: params.SLACK_CHANNEL,
+                    enableTeams: true,
+                    enableEmail: params.ENVIRONMENT == 'prod'
+                ])
+                
+                // Update deployment status
+                cloudProvider.updateDeploymentStatus([
+                    status: 'SUCCESS',
+                    version: BUILD_VERSION,
+                    environment: params.ENVIRONMENT,
+                    cloudProvider: env.CLOUD_PROVIDER,
+                    infraSource: infraConfig?.source
+                ])
+            }
+        }
+        
+        failure {
+            script {
+                notifier.notifyBuildFailure([
+                    message: """
+                    ❌ F1 Pipeline FAILED! 🚨
+                    
+                    📦 Version: ${BUILD_VERSION}
+                    🌍 Environment: ${params.ENVIRONMENT}
+                    ☁️  Target Cloud: ${env.CLOUD_PROVIDER ?: 'unknown'}
+                    ❗ Stage: ${env.STAGE_NAME ?: 'unknown'}
+                    ⏱️  Duration: ${currentBuild.durationString}
+                    
+                    🔗 [Build Details](${env.BUILD_URL})
+                    📋 [Console Log](${env.BUILD_URL}console)
+                    """,
+                    slackChannel: params.SLACK_CHANNEL,
+                    enableTeams: true,
+                    enableEmail: true,
+                    enablePagerDuty: params.ENVIRONMENT == 'prod'
+                ])
+                
+                // Update deployment status
+                cloudProvider.updateDeploymentStatus([
+                    status: 'FAILED',
+                    version: BUILD_VERSION,
+                    environment: params.ENVIRONMENT,
+                    cloudProvider: env.CLOUD_PROVIDER ?: 'unknown',
+                    error: "Failed in stage: ${env.STAGE_NAME ?: 'unknown'}"
+                ])
+                
+                // Trigger rollback if production
+                if (params.ENVIRONMENT == 'prod') {
+                    echo "🔄 Triggering rollback for production failure..."
+                    build job: 'f1-rollback-pipeline',
+                        parameters: [
+                            string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                            string(name: 'CLOUD_PROVIDER', value: env.CLOUD_PROVIDER),
+                            string(name: 'TARGET_VERSION', value: 'previous')
+                        ],
+                        wait: false
+                }
+            }
+        }
+        
+        unstable {
+            script {
+                notifier.sendSlackStatusNotification('UNSTABLE', [
+                    message: """
+                    ⚠️ F1 Pipeline UNSTABLE 🏎️
+                    
+                    📦 Version: ${BUILD_VERSION}
+                    🌍 Environment: ${params.ENVIRONMENT}
+                    ☁️  Target Cloud: ${env.CLOUD_PROVIDER ?: 'unknown'}
+                    ⚠️  Some tests failed but deployment continued
+                    
+                    🔗 [Build Details](${env.BUILD_URL})
+                    """,
+                    channel: params.SLACK_CHANNEL
+                ])
+            }
+        }
+    }
+}

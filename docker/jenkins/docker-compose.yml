@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  f1-data-platform:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+      args:
+        BUILD_VERSION: "local-dev"
+        GIT_COMMIT: "local"
+    image: f1-data-platform:local
+    container_name: f1-data-platform-dev
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - CLOUD_PROVIDER=aws
+    volumes:
+      # Mount source code for development
+      - ../f1_data_platform:/app/f1_data_platform
+      - ../config:/app/config
+      - ./local-data:/app/local-data
+    ports:
+      - "8000:8000"  # API port (if applicable)
+    networks:
+      - f1-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import f1_data_platform; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Local testing database (optional)
+  postgres:
+    image: postgres:13-alpine
+    container_name: f1-postgres-dev
+    environment:
+      POSTGRES_DB: f1_data
+      POSTGRES_USER: f1user
+      POSTGRES_PASSWORD: f1pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - f1-network
+    restart: unless-stopped
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:6-alpine
+    container_name: f1-redis-dev
+    ports:
+      - "6379:6379"
+    networks:
+      - f1-network
+    restart: unless-stopped
+
+networks:
+  f1-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

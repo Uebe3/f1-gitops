@@ -1,0 +1,90 @@
+# Example F1 Data Platform Configuration
+# This file should be placed in the source repository at: config/config.yaml
+
+# Application Configuration
+application:
+  name: f1-data-platform
+  version: 1.0.0
+  description: "F1 Data Platform for multi-cloud analytics"
+
+# Cloud Provider Configuration
+cloud_provider: aws  # Options: aws, azure, gcp
+
+# Environment Configuration (can be overridden by pipeline parameters)
+environment: dev
+
+# Deployment Configuration
+deployment:
+  mode: standard  # Options: standard, blue-green, canary
+  strategy: rolling  # Options: rolling, recreate, blue-green
+  infrastructure_source: auto  # Options: auto, terraform, cloudformation, bicep
+  skip_tests: false
+  auto_approve: false  # Auto-approve infrastructure changes
+  timeout_minutes: 60
+
+# Feature Flags
+features:
+  enable_monitoring: true
+  enable_backup: false
+  enable_encryption: true
+  enable_multi_az: false
+  enable_cost_alerts: true
+  enable_security_scanning: true
+
+# Testing Configuration
+testing:
+  unit_tests: true
+  integration_tests: true
+  performance_tests: true
+  security_tests: true
+  smoke_tests: true
+  coverage_threshold: 80
+
+# Notification Configuration
+notifications:
+  slack:
+    enabled: true
+    channel: "#f1-deployments"
+    on_success: true
+    on_failure: true
+    on_start: false
+  email:
+    enabled: false
+    recipients: []
+    on_success: false
+    on_failure: true
+  teams:
+    enabled: false
+    webhook_url: ""
+  pagerduty:
+    enabled: false  # Only for production
+    service_key: ""
+
+# Quality Gates
+quality_gates:
+  code_coverage_threshold: 80
+  security_scan_threshold: medium  # low, medium, high, critical
+  performance_threshold:
+    response_time_ms: 2000
+    throughput_rps: 100
+  cost_threshold_usd: 100
+
+# Resource Configuration (cloud-specific defaults)
+resources:
+  compute:
+    lambda_memory_mb: 512
+    lambda_timeout_seconds: 300
+    glue_max_capacity: 2
+  storage:
+    data_retention_days: 365
+    backup_retention_days: 30
+  networking:
+    create_vpc: false
+    enable_nat_gateway: false
+
+# Pipeline Configuration
+pipeline:
+  parallel_deployment: false
+  rollback_on_failure: true
+  approval_required_for_prod: true
+  auto_promote_to_staging: false
