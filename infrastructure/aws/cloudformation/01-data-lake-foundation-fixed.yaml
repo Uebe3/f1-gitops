@@ -1,0 +1,301 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'F1 Data Platform - Data Lake Foundation Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+    
+  ProjectName:
+    Type: String
+    Default: f1-data-platform
+    Description: Project name for resource naming
+    
+  DataLakeBucketName:
+    Type: String
+    Default: f1-data-lake
+    Description: Name for the S3 data lake bucket (will be suffixed with account ID)
+
+Resources:
+  # S3 Data Lake Bucket
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${DataLakeBucketName}-${Environment}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: IntelligentTiering
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 1
+                StorageClass: INTELLIGENT_TIERING
+              - TransitionInDays: 30
+                StorageClass: GLACIER
+              - TransitionInDays: 365
+                StorageClass: DEEP_ARCHIVE
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # NOTE: S3 Event NotificationConfiguration removed to avoid circular dependency
+      # with Lambda function. The notification can be added via a separate stack or 
+      # custom resource after both the bucket and Lambda are created.
+      
+  # Athena Results Bucket
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-athena-results-${Environment}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldQueryResults
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Glue Data Catalog Database
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub '${ProjectName}_${Environment}'
+        Description: 'F1 Data Platform database for analytics tables'
+
+  # Athena Workgroup
+  AthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}'
+      Description: 'F1 Data Platform Athena workgroup'
+      WorkGroupConfiguration:
+        ResultConfiguration:
+          OutputLocation: !Sub 's3://${AthenaResultsBucket}/queries/'
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+        EnforceWorkGroupConfiguration: true
+        BytesScannedCutoffPerQuery: 1073741824  # 1GB limit
+
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3DataLakeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub '${DataLakeBucket.Arn}/*'
+                  - !GetAtt DataLakeBucket.Arn
+        - PolicyName: GlueAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJob
+                  - glue:GetJobRun
+                  - glue:UpdateDatabase
+                  - glue:UpdateTable
+                  - glue:CreateTable
+                Resource: '*'
+
+  # IAM Role for Glue Jobs
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-glue-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3FullAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource:
+                  - !Sub '${DataLakeBucket.Arn}/*'
+                  - !GetAtt DataLakeBucket.Arn
+                  - !Sub '${AthenaResultsBucket.Arn}/*'
+                  - !GetAtt AthenaResultsBucket.Arn
+
+  # IAM Role for Athena
+  AthenaServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-athena-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: athena.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AthenaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:*
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: '*'
+
+  # Lambda function for data processing trigger
+  DataProcessingLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-data-processor-${Environment}'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 900
+      MemorySize: 1024
+      Environment:
+        Variables:
+          DATA_LAKE_BUCKET: !Ref DataLakeBucket
+          GLUE_DATABASE: !Ref GlueDatabase
+          ENVIRONMENT: !Ref Environment
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          
+          def lambda_handler(event, context):
+              """Process S3 events and trigger Glue jobs."""
+              
+              print(f"Received event: {json.dumps(event)}")
+              
+              # Process S3 events
+              for record in event.get('Records', []):
+                  if 's3' in record:
+                      bucket = record['s3']['bucket']['name']
+                      key = record['s3']['object']['key']
+                      
+                      print(f"Processing file: s3://{bucket}/{key}")
+                      
+                      # Trigger appropriate Glue job based on file path
+                      if 'raw-data' in key:
+                          trigger_glue_job('f1-raw-data-processor')
+                      
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Processing completed')
+              }
+          
+          def trigger_glue_job(job_name):
+              """Trigger a Glue job."""
+              try:
+                  glue_client = boto3.client('glue')
+                  response = glue_client.start_job_run(JobName=job_name)
+                  print(f"Started Glue job: {job_name}, Run ID: {response['JobRunId']}")
+              except Exception as e:
+                  print(f"Error starting Glue job {job_name}: {str(e)}")
+
+  # Lambda permission for S3 to invoke
+  DataProcessingLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DataProcessingLambda
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt DataLakeBucket.Arn
+
+  # CloudWatch Log Groups with retention
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${DataProcessingLambda}'
+      RetentionInDays: 30
+
+Outputs:
+  DataLakeBucketName:
+    Description: 'S3 Data Lake bucket name'
+    Value: !Ref DataLakeBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DataLakeBucket'
+      
+  AthenaResultsBucketName:
+    Description: 'Athena results bucket name'
+    Value: !Ref AthenaResultsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-AthenaResultsBucket'
+      
+  GlueDatabaseName:
+    Description: 'Glue database name'
+    Value: !Ref GlueDatabase
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueDatabase'
+      
+  AthenaWorkgroupName:
+    Description: 'Athena workgroup name'
+    Value: !Ref AthenaWorkgroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AthenaWorkgroup'
+      
+  LambdaExecutionRoleArn:
+    Description: 'Lambda execution role ARN'
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaRole'
+      
+  GlueServiceRoleArn:
+    Description: 'Glue service role ARN'
+    Value: !GetAtt GlueServiceRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueRole'

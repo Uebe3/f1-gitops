@@ -57,14 +57,14 @@ Resources:
         Rules:
           - Id: DataLifecycleRule
             Status: Enabled
-            ExpirationInDays: !If [IsProduction, 2555, 365]  # 7 years for prod, 1 year for others
+            ExpirationInDays: !If [IsProduction, 2555, 730]  # 7 years for prod, 2 years for dev/staging
             NoncurrentVersionExpirationInDays: 90
             Transitions:
               - TransitionInDays: 30
                 StorageClass: STANDARD_IA
               - TransitionInDays: 90
                 StorageClass: GLACIER
-              - TransitionInDays: 365
+              - TransitionInDays: 180
                 StorageClass: DEEP_ARCHIVE
           - Id: IncompleteMultipartUploads
             Status: Enabled

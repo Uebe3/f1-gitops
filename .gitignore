@@ -10,8 +10,74 @@ docs/docs-local/
 # Environment-specific secrets
 environments/*/secrets.yaml
 *.secret.yaml
+.env
+.env.*
+!.env.example
+
+# AWS Credentials (should use AWS CLI or environment variables)
+.aws/
+credentials
+config
 
 # Terraform state files
 *.tfstate
 *.tfstate.*
+.terraform/
+terraform.tfvars
+*.tfvars
+!*.tfvars.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+*.pid
+*.seed
+
+# Sensitive data
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
 .terraform/
