@@ -126,11 +126,11 @@ pipeline {
                         // Run SonarQube analysis
                         withSonarQubeEnv('SonarQube') {
                             sh """
-                                sonar-scanner ^
-                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} ^
-                                    -Dsonar.projectName="F1 Data Platform" ^
-                                    -Dsonar.projectVersion=${BUILD_VERSION} ^
-                                    -Dsonar.sources=infrastructure,scripts/deployment ^
+                                sonar-scanner \
+                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName="F1 Data Platform" \
+                                    -Dsonar.projectVersion=${BUILD_VERSION} \
+                                    -Dsonar.sources=infrastructure,scripts/deployment \
                                     -Dsonar.exclusions=**/*.pyc,**/__pycache__/**,.venv/**
                             """
                         }
@@ -170,8 +170,8 @@ pipeline {
                 script {
                     try {
                         sh """
-                            aws cloudformation validate-template ^
-                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml ^
+                            aws cloudformation validate-template \
+                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml \
                                 --region ${env.AWS_REGION}
                         """
                         
@@ -197,10 +197,10 @@ pipeline {
                     try {
                         // Activate Python virtual environment and run deployment
                         sh """
-                            .venv\\Scripts\\activate && ^
-                            python scripts/deployment/deploy-f1-platform.py ^
-                                --environment ${params.ENVIRONMENT} ^
-                                --region ${env.AWS_REGION} ^
+                            .venv\\Scripts\\activate && \
+                            python scripts/deployment/deploy-f1-platform.py \
+                                --environment ${params.ENVIRONMENT} \
+                                --region ${env.AWS_REGION} \
                                 --monitoring-level ${params.MONITORING_LEVEL}
                         """
                         
@@ -241,9 +241,9 @@ pipeline {
                     try {
                         // Run validation script
                         sh """
-                            .venv\\Scripts\\activate && ^
-                            python scripts/deployment/validate-infrastructure.py ^
-                                --environment ${params.ENVIRONMENT} ^
+                            .venv\\Scripts\\activate && \
+                            python scripts/deployment/validate-infrastructure.py \
+                                --environment ${params.ENVIRONMENT} \
                                 --region ${env.AWS_REGION}
                         """
                         
