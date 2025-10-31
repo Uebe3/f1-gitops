@@ -39,7 +39,7 @@ pipeline {
         AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
         
         // GitHub Token
-        GITHUB_TOKEN = credentials('github-token')
+        GITHUB_TOKEN = credentials('github-credentials')
         
         // SonarQube Token
         SONARQUBE_TOKEN = credentials('sonarqube-token')
