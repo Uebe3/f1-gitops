@@ -125,7 +125,7 @@ pipeline {
                     try {
                         // Run SonarQube analysis
                         withSonarQubeEnv('SonarQube') {
-                            bat """
+                            sh """
                                 sonar-scanner ^
                                     -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} ^
                                     -Dsonar.projectName="F1 Data Platform" ^
@@ -169,7 +169,7 @@ pipeline {
             steps {
                 script {
                     try {
-                        bat """
+                        sh """
                             aws cloudformation validate-template ^
                                 --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml ^
                                 --region ${env.AWS_REGION}
@@ -196,7 +196,7 @@ pipeline {
                 script {
                     try {
                         // Activate Python virtual environment and run deployment
-                        bat """
+                        sh """
                             .venv\\Scripts\\activate && ^
                             python scripts/deployment/deploy-f1-platform.py ^
                                 --environment ${params.ENVIRONMENT} ^
@@ -240,7 +240,7 @@ pipeline {
                 script {
                     try {
                         // Run validation script
-                        bat """
+                        sh """
                             .venv\\Scripts\\activate && ^
                             python scripts/deployment/validate-infrastructure.py ^
                                 --environment ${params.ENVIRONMENT} ^
@@ -375,7 +375,7 @@ pipeline {
 def getDeployedStacks(environment) {
     def stacks = []
     try {
-        def output = bat(
+        def output = sh(
             script: "aws cloudformation list-stacks --region ${env.AWS_REGION} --query \"StackSummaries[?StackStatus!='DELETE_COMPLETE' && contains(StackName, '${environment}')].StackName\" --output json",
             returnStdout: true
         ).trim()
@@ -392,7 +392,7 @@ def getStackResources(environment) {
     try {
         def stacks = getDeployedStacks(environment)
         stacks.each { stackName ->
-            def output = bat(
+            def output = sh(
                 script: "aws cloudformation describe-stack-resources --stack-name ${stackName} --region ${env.AWS_REGION} --query \"StackResources[].ResourceType\" --output json",
                 returnStdout: true
             ).trim()
