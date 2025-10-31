@@ -38,9 +38,6 @@ pipeline {
         
         // GitHub Token
         GITHUB_TOKEN = credentials('github-credentials')
-        
-        // SonarQube Token
-        SONARQUBE_TOKEN = credentials('sonarqube-token')
     }
     
     parameters {
