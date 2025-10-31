@@ -297,52 +297,78 @@ pipeline {
     post {
         success {
             script {
-                discordNotifier.notify([
-                    status: 'SUCCESS',
-                    title: '🎉 Pipeline Completed Successfully',
-                    description: "F1 Data Platform deployed to ${params.ENVIRONMENT}",
-                    fields: [
-                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
-                        [name: 'Duration', value: currentBuild.durationString, inline: true],
-                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
-                        [name: 'Build URL', value: env.BUILD_URL, inline: false]
-                    ]
-                ])
+                try {
+                    if (binding.hasVariable('discordNotifier')) {
+                        discordNotifier.notify([
+                            status: 'SUCCESS',
+                            title: '🎉 Pipeline Completed Successfully',
+                            description: "F1 Data Platform deployed to ${params.ENVIRONMENT}",
+                            fields: [
+                                [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                                [name: 'Duration', value: currentBuild.durationString, inline: true],
+                                [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                                [name: 'Build URL', value: env.BUILD_URL, inline: false]
+                            ]
+                        ])
+                    }
+                } catch (Exception e) {
+                    echo "Failed to send Discord notification: ${e.message}"
+                }
             }
         }
         failure {
             script {
-                discordNotifier.notify([
-                    status: 'FAILURE',
-                    title: '💥 Pipeline Failed',
-                    description: "F1 Data Platform deployment to ${params.ENVIRONMENT} failed",
-                    fields: [
-                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
-                        [name: 'Failed Stage', value: env.STAGE_NAME ?: 'Unknown', inline: true],
-                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
-                        [name: 'Build URL', value: env.BUILD_URL, inline: false],
-                        [name: 'Console Output', value: "${env.BUILD_URL}console", inline: false]
-                    ]
-                ])
+                try {
+                    if (binding.hasVariable('discordNotifier')) {
+                        discordNotifier.notify([
+                            status: 'FAILURE',
+                            title: '💥 Pipeline Failed',
+                            description: "F1 Data Platform deployment to ${params.ENVIRONMENT} failed",
+                            fields: [
+                                [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                                [name: 'Failed Stage', value: env.STAGE_NAME ?: 'Unknown', inline: true],
+                                [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                                [name: 'Build URL', value: env.BUILD_URL, inline: false],
+                                [name: 'Console Output', value: "${env.BUILD_URL}console", inline: false]
+                            ]
+                        ])
+                    } else {
+                        echo "Discord notifier not initialized, skipping notification"
+                    }
+                } catch (Exception e) {
+                    echo "Failed to send Discord notification: ${e.message}"
+                }
             }
         }
         unstable {
             script {
-                discordNotifier.notify([
-                    status: 'UNSTABLE',
-                    title: '⚠️ Pipeline Unstable',
-                    description: "F1 Data Platform deployment completed with warnings",
-                    fields: [
-                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
-                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
-                        [name: 'Build URL', value: env.BUILD_URL, inline: false]
-                    ]
-                ])
+                try {
+                    if (binding.hasVariable('discordNotifier')) {
+                        discordNotifier.notify([
+                            status: 'UNSTABLE',
+                            title: '⚠️ Pipeline Unstable',
+                            description: "F1 Data Platform deployment completed with warnings",
+                            fields: [
+                                [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                                [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                                [name: 'Build URL', value: env.BUILD_URL, inline: false]
+                            ]
+                        ])
+                    }
+                } catch (Exception e) {
+                    echo "Failed to send Discord notification: ${e.message}"
+                }
             }
         }
         always {
-            // Cleanup
-            cleanWs(deleteDirs: true)
+            script {
+                try {
+                    // Cleanup - only if inside a node block
+                    echo "Build completed"
+                } catch (Exception e) {
+                    echo "Cleanup error: ${e.message}"
+                }
+            }
         }
     }
 }
