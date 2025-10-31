@@ -7,8 +7,6 @@
  * with Discord notifications and SonarQube quality gates.
  */
 
-@Library('shared-libraries') _
-
 pipeline {
     agent any
     
