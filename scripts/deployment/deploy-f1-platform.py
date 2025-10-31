@@ -175,6 +175,9 @@ def main():
                        help='AWS profile to use')
     parser.add_argument('--project-name', default='f1-data-platform',
                        help='Project name for resource naming')
+    parser.add_argument('--monitoring-level', default='minimal',
+                       choices=['minimal', 'standard', 'full', 'none'],
+                       help='CloudWatch monitoring level: minimal (basic metrics), standard (metrics+logs), full (detailed+alarms), none (no monitoring)')
     parser.add_argument('--skip-foundation', action='store_true',
                        help='Skip foundation stack deployment')
     parser.add_argument('--skip-glue', action='store_true',
@@ -187,9 +190,8 @@ def main():
     # Initialize deployer
     deployer = CloudFormationDeployer(region=args.region, profile=args.profile)
     
-    # Create deployment bucket
-    account_id = deployer.session.client('sts').get_caller_identity()['Account']
-    bucket_name = f"f1-platform-cf-templates-{args.environment}-{account_id}"
+    # Create deployment bucket (without account ID in name)
+    bucket_name = f"f1-platform-cf-templates-{args.environment}"
     deployer.create_deployment_bucket(bucket_name)
     
     # Define deployment configuration
@@ -205,7 +207,8 @@ def main():
             'parameters': {
                 'Environment': args.environment,
                 'ProjectName': args.project_name,
-                'DataLakeBucketName': f'f1-data-lake'
+                'DataLakeBucketName': f'f1-data-lake',
+                'MonitoringLevel': args.monitoring_level
             },
             'capabilities': ['CAPABILITY_NAMED_IAM'],
             'skip': args.skip_foundation
@@ -217,6 +220,7 @@ def main():
             'parameters': {
                 'Environment': args.environment,
                 'ProjectName': args.project_name,
+                'MonitoringLevel': args.monitoring_level,
                 # These will be populated from foundation stack outputs
                 'DataLakeBucket': '',
                 'GlueDatabase': '',
@@ -233,6 +237,7 @@ def main():
             'parameters': {
                 'Environment': args.environment,
                 'ProjectName': args.project_name,
+                'MonitoringLevel': args.monitoring_level,
                 # These will be populated from foundation stack outputs
                 'DataLakeBucket': '',
                 'GlueDatabase': '',

@@ -23,7 +23,7 @@ Resources:
   DataLakeBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${DataLakeBucketName}-${Environment}-${AWS::AccountId}'
+      BucketName: !Sub '${DataLakeBucketName}-${Environment}'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -54,7 +54,7 @@ Resources:
   AthenaResultsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${ProjectName}-athena-results-${Environment}-${AWS::AccountId}'
+      BucketName: !Sub '${ProjectName}-athena-results-${Environment}'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:

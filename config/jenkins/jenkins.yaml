@@ -14,7 +14,7 @@ jenkins:
             value: "${DOCKER_REGISTRY:-docker.io}"
           - key: "F1_APP_NAME"
             value: "f1-data-platform"
-          - key: "SLACK_CHANNEL"
+          - key: "DISCORD_CHANNEL"
             value: "#f1-deployments"
 
 credentials:
@@ -44,12 +44,12 @@ credentials:
               description: "GitHub Personal Access Token"
               secret: "${GITHUB_TOKEN}"
           
-          # Slack Webhook
+          # Discord Webhook
           - string:
               scope: GLOBAL
-              id: "slack-webhook"
-              description: "Slack Webhook URL"
-              secret: "${SLACK_WEBHOOK_URL}"
+              id: "discord-webhook"
+              description: "Discord Webhook URL"
+              secret: "${DISCORD_WEBHOOK_URL}"
           
           # SonarQube Token
           - string:
@@ -84,19 +84,18 @@ tool:
 
 unclassified:
   location:
-    url: "${JENKINS_URL}"
-    adminAddress: "admin@company.com"
+    url: "${JENKINS_URL:-http://localhost:8080}"
+    adminAddress: "admin@f1-data-platform.com"
   
-  slackNotifier:
-    botUser: true
-    sendAsText: false
-    teamDomain: "${SLACK_TEAM_DOMAIN}"
-    token: "${SLACK_BOT_TOKEN}"
+  # Discord Notifier Configuration
+  # Note: Discord notifications will be handled via webhook in pipeline scripts
+  discordWebhook:
+    webhookUrl: "${DISCORD_WEBHOOK_URL}"
   
   sonarGlobalConfiguration:
     installations:
       - name: "SonarQube"
-        serverUrl: "${SONARQUBE_URL}"
+        serverUrl: "${SONARQUBE_URL:-http://sonarqube:9000}"
         credentialsId: "sonarqube-token"
   
   globalLibraries:

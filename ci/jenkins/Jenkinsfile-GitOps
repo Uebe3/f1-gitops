@@ -1,0 +1,408 @@
+#!/usr/bin/env groovy
+
+/**
+ * F1 Data Platform GitOps Deployment Pipeline
+ * 
+ * This pipeline deploys AWS infrastructure using CloudFormation templates
+ * with Discord notifications and SonarQube quality gates.
+ */
+
+@Library('shared-libraries') _
+
+pipeline {
+    agent any
+    
+    environment {
+        // Application Configuration
+        APP_NAME = 'f1-data-platform'
+        BUILD_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(8)}"
+        
+        // AWS Configuration
+        AWS_REGION = 'us-east-1'
+        AWS_ACCOUNT_ID = '471112953132'
+        
+        // Environment - set from parameters
+        ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
+        
+        // CloudFormation Configuration
+        CF_TEMPLATE_BUCKET = "f1-platform-cf-templates-${env.ENVIRONMENT}"
+        
+        // Quality Gates
+        SONAR_PROJECT_KEY = 'f1-data-platform'
+        
+        // Discord Configuration
+        DISCORD_WEBHOOK_URL = credentials('discord-webhook')
+        DISCORD_CHANNEL = '#f1-deployments'
+        
+        // AWS Credentials
+        AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        
+        // GitHub Token
+        GITHUB_TOKEN = credentials('github-token')
+        
+        // SonarQube Token
+        SONARQUBE_TOKEN = credentials('sonarqube-token')
+    }
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target deployment environment'
+        )
+        choice(
+            name: 'DEPLOYMENT_TYPE',
+            choices: ['full', 'foundation', 'glue', 'athena', 'access'],
+            description: 'Which CloudFormation stacks to deploy'
+        )
+        choice(
+            name: 'MONITORING_LEVEL',
+            choices: ['minimal', 'standard', 'full', 'none'],
+            description: 'CloudWatch monitoring and logging level (minimal=basic metrics, standard=metrics+logs, full=detailed metrics+logs+alarms, none=no monitoring)'
+        )
+        booleanParam(
+            name: 'RUN_QUALITY_CHECKS',
+            defaultValue: true,
+            description: 'Run SonarQube quality checks before deployment'
+        )
+        booleanParam(
+            name: 'RUN_TESTS',
+            defaultValue: true,
+            description: 'Run validation tests after deployment'
+        )
+        booleanParam(
+            name: 'SKIP_DEPLOY',
+            defaultValue: false,
+            description: 'Skip deployment (for testing pipeline only)'
+        )
+    }
+    
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '50'))
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+    
+    triggers {
+        githubPush()
+    }
+    
+    stages {
+        stage('📋 Initialize') {
+            steps {
+                script {
+                    // Load shared libraries
+                    discord = load 'ci/shared-libraries/discordNotifier.groovy'
+                    discordNotifier = discord.newInstance(this, env.DISCORD_WEBHOOK_URL)
+                    
+                    // Send deployment started notification
+                    discordNotifier.notifyDeploymentStarted([
+                        environment: params.ENVIRONMENT,
+                        branch: env.GIT_BRANCH ?: 'main',
+                        commit: env.GIT_COMMIT ?: 'unknown',
+                        triggeredBy: env.BUILD_USER ?: 'Jenkins'
+                    ])
+                    
+                    // Display build information
+                    echo """
+                    🏎️ F1 Data Platform GitOps Deployment
+                    ═══════════════════════════════════════
+                    📦 Version: ${BUILD_VERSION}
+                    🌍 Environment: ${params.ENVIRONMENT}
+                    ☁️  Cloud Provider: AWS
+                    🏗️  Deployment Type: ${params.DEPLOYMENT_TYPE}
+                    🔒 Quality Checks: ${params.RUN_QUALITY_CHECKS}
+                    🧪 Tests: ${params.RUN_TESTS}
+                    📱 Discord: ${env.DISCORD_CHANNEL}
+                    """
+                }
+            }
+        }
+        
+        stage('🔍 Code Quality') {
+            when {
+                expression { params.RUN_QUALITY_CHECKS }
+            }
+            steps {
+                script {
+                    try {
+                        // Run SonarQube analysis
+                        withSonarQubeEnv('SonarQube') {
+                            bat """
+                                sonar-scanner ^
+                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} ^
+                                    -Dsonar.projectName="F1 Data Platform" ^
+                                    -Dsonar.projectVersion=${BUILD_VERSION} ^
+                                    -Dsonar.sources=infrastructure,scripts/deployment ^
+                                    -Dsonar.exclusions=**/*.pyc,**/__pycache__/**,.venv/**
+                            """
+                        }
+                        
+                        // Wait for quality gate
+                        timeout(time: 5, unit: 'MINUTES') {
+                            def qg = waitForQualityGate()
+                            
+                            // Notify quality gate result
+                            discordNotifier.notifyQualityGate([
+                                passed: qg.status == 'OK',
+                                coverage: qg.coverage ?: 0,
+                                bugs: qg.bugs ?: 0,
+                                codeSmells: qg.codeSmells ?: 0,
+                                securityHotspots: qg.securityHotspots ?: 0,
+                                sonarUrl: env.SONAR_HOST_URL
+                            ])
+                            
+                            if (qg.status != 'OK') {
+                                error "Quality gate failed: ${qg.status}"
+                            }
+                        }
+                    } catch (Exception e) {
+                        discordNotifier.notify([
+                            status: 'FAILURE',
+                            title: '❌ Quality Gate Failed',
+                            description: "SonarQube analysis failed: ${e.message}"
+                        ])
+                        throw e
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Validate CloudFormation Templates') {
+            steps {
+                script {
+                    try {
+                        bat """
+                            aws cloudformation validate-template ^
+                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml ^
+                                --region ${env.AWS_REGION}
+                        """
+                        
+                        echo "✅ CloudFormation templates are valid"
+                    } catch (Exception e) {
+                        discordNotifier.notify([
+                            status: 'FAILURE',
+                            title: '❌ Template Validation Failed',
+                            description: "CloudFormation template validation failed: ${e.message}"
+                        ])
+                        throw e
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Deploy Infrastructure') {
+            when {
+                expression { !params.SKIP_DEPLOY }
+            }
+            steps {
+                script {
+                    try {
+                        // Activate Python virtual environment and run deployment
+                        bat """
+                            .venv\\Scripts\\activate && ^
+                            python scripts/deployment/deploy-f1-platform.py ^
+                                --environment ${params.ENVIRONMENT} ^
+                                --region ${env.AWS_REGION} ^
+                                --monitoring-level ${params.MONITORING_LEVEL}
+                        """
+                        
+                        // Get stack outputs
+                        def stacks = getDeployedStacks(params.ENVIRONMENT)
+                        def resources = getStackResources(params.ENVIRONMENT)
+                        
+                        // Calculate deployment duration
+                        def duration = currentBuild.durationString.replace(' and counting', '')
+                        
+                        // Send success notification
+                        discordNotifier.notifyDeploymentSuccess([
+                            environment: params.ENVIRONMENT,
+                            duration: duration,
+                            stacks: stacks.join(', '),
+                            resources: resources.join(', ')
+                        ])
+                        
+                    } catch (Exception e) {
+                        discordNotifier.notifyDeploymentFailure([
+                            environment: params.ENVIRONMENT,
+                            failedStage: 'Deploy Infrastructure',
+                            error: e.message,
+                            buildUrl: env.BUILD_URL
+                        ])
+                        throw e
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Run Validation Tests') {
+            when {
+                expression { params.RUN_TESTS && !params.SKIP_DEPLOY }
+            }
+            steps {
+                script {
+                    try {
+                        // Run validation script
+                        bat """
+                            .venv\\Scripts\\activate && ^
+                            python scripts/deployment/validate-infrastructure.py ^
+                                --environment ${params.ENVIRONMENT} ^
+                                --region ${env.AWS_REGION}
+                        """
+                        
+                        discordNotifier.notify([
+                            status: 'SUCCESS',
+                            title: '✅ Validation Tests Passed',
+                            description: "All infrastructure validation tests passed for ${params.ENVIRONMENT}"
+                        ])
+                        
+                    } catch (Exception e) {
+                        discordNotifier.notify([
+                            status: 'UNSTABLE',
+                            title: '⚠️ Validation Tests Failed',
+                            description: "Some validation tests failed: ${e.message}"
+                        ])
+                        // Don't fail the build for validation test failures
+                        unstable('Validation tests failed')
+                    }
+                }
+            }
+        }
+        
+        stage('📊 Generate Deployment Report') {
+            steps {
+                script {
+                    // Generate deployment summary
+                    def report = generateDeploymentReport(params.ENVIRONMENT)
+                    
+                    // Archive the report
+                    writeFile file: 'deployment-report.json', text: groovy.json.JsonOutput.toJson(report)
+                    archiveArtifacts artifacts: 'deployment-report.json', fingerprint: true
+                    
+                    // Display summary
+                    echo """
+                    📊 Deployment Summary
+                    ═══════════════════════
+                    Environment: ${report.environment}
+                    Stacks Deployed: ${report.stacks.size()}
+                    Resources Created: ${report.resources.size()}
+                    Duration: ${report.duration}
+                    Status: ${report.status}
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                discordNotifier.notify([
+                    status: 'SUCCESS',
+                    title: '🎉 Pipeline Completed Successfully',
+                    description: "F1 Data Platform deployed to ${params.ENVIRONMENT}",
+                    fields: [
+                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                        [name: 'Duration', value: currentBuild.durationString, inline: true],
+                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                        [name: 'Build URL', value: env.BUILD_URL, inline: false]
+                    ]
+                ])
+            }
+        }
+        failure {
+            script {
+                discordNotifier.notify([
+                    status: 'FAILURE',
+                    title: '💥 Pipeline Failed',
+                    description: "F1 Data Platform deployment to ${params.ENVIRONMENT} failed",
+                    fields: [
+                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                        [name: 'Failed Stage', value: env.STAGE_NAME ?: 'Unknown', inline: true],
+                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                        [name: 'Build URL', value: env.BUILD_URL, inline: false],
+                        [name: 'Console Output', value: "${env.BUILD_URL}console", inline: false]
+                    ]
+                ])
+            }
+        }
+        unstable {
+            script {
+                discordNotifier.notify([
+                    status: 'UNSTABLE',
+                    title: '⚠️ Pipeline Unstable',
+                    description: "F1 Data Platform deployment completed with warnings",
+                    fields: [
+                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                        [name: 'Build URL', value: env.BUILD_URL, inline: false]
+                    ]
+                ])
+            }
+        }
+        always {
+            // Cleanup
+            cleanWs(deleteDirs: true)
+        }
+    }
+}
+
+// Helper Functions
+
+def getDeployedStacks(environment) {
+    def stacks = []
+    try {
+        def output = bat(
+            script: "aws cloudformation list-stacks --region ${env.AWS_REGION} --query \"StackSummaries[?StackStatus!='DELETE_COMPLETE' && contains(StackName, '${environment}')].StackName\" --output json",
+            returnStdout: true
+        ).trim()
+        
+        stacks = readJSON(text: output)
+    } catch (Exception e) {
+        echo "Warning: Could not retrieve stack list: ${e.message}"
+    }
+    return stacks
+}
+
+def getStackResources(environment) {
+    def resources = []
+    try {
+        def stacks = getDeployedStacks(environment)
+        stacks.each { stackName ->
+            def output = bat(
+                script: "aws cloudformation describe-stack-resources --stack-name ${stackName} --region ${env.AWS_REGION} --query \"StackResources[].ResourceType\" --output json",
+                returnStdout: true
+            ).trim()
+            
+            def stackResources = readJSON(text: output)
+            resources.addAll(stackResources)
+        }
+    } catch (Exception e) {
+        echo "Warning: Could not retrieve resource list: ${e.message}"
+    }
+    return resources.unique()
+}
+
+def generateDeploymentReport(environment) {
+    return [
+        environment: environment,
+        buildNumber: env.BUILD_NUMBER,
+        buildUrl: env.BUILD_URL,
+        gitCommit: env.GIT_COMMIT,
+        gitBranch: env.GIT_BRANCH,
+        timestamp: new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')),
+        duration: currentBuild.durationString,
+        status: currentBuild.currentResult,
+        stacks: getDeployedStacks(environment),
+        resources: getStackResources(environment),
+        parameters: [
+            deploymentType: params.DEPLOYMENT_TYPE,
+            monitoringLevel: params.MONITORING_LEVEL,
+            runQualityChecks: params.RUN_QUALITY_CHECKS,
+            runTests: params.RUN_TESTS,
+            skipDeploy: params.SKIP_DEPLOY
+        ]
+    ]
+}
