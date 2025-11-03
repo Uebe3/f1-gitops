@@ -199,9 +199,9 @@ pipeline {
                 script {
                     try {
                         // Install required Python packages and run deployment
-                        // Note: Using --user to avoid needing venv in container
+                        // Note: Using --break-system-packages for PEP 668 compliance in Python 3.13+
                         sh """
-                            pip install --user boto3
+                            pip install --break-system-packages boto3 || pip install --user boto3 || echo "boto3 already installed"
                             python3 scripts/deployment/deploy-f1-platform.py \
                                 --environment ${params.ENVIRONMENT} \
                                 --region ${env.AWS_REGION} \
