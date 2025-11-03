@@ -128,12 +128,12 @@ pipeline {
                     try {
                         // Run SonarQube analysis
                         withSonarQubeEnv('SonarQube') {
-                            bat """
-                                sonar-scanner ^
-                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} ^
-                                    -Dsonar.projectName="F1 Data Platform" ^
-                                    -Dsonar.projectVersion=${BUILD_VERSION} ^
-                                    -Dsonar.sources=infrastructure,scripts/deployment ^
+                            sh """
+                                sonar-scanner \
+                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName="F1 Data Platform" \
+                                    -Dsonar.projectVersion=${BUILD_VERSION} \
+                                    -Dsonar.sources=infrastructure,scripts/deployment \
                                     -Dsonar.exclusions=**/*.pyc,**/__pycache__/**,.venv/**
                             """
                         }
@@ -172,9 +172,9 @@ pipeline {
             steps {
                 script {
                     try {
-                        bat """
-                            aws cloudformation validate-template ^
-                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml ^
+                        sh """
+                            aws cloudformation validate-template \
+                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml \
                                 --region ${env.AWS_REGION}
                         """
                         
