@@ -195,12 +195,11 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Create Python virtual environment and run deployment
+                        // Install required Python packages and run deployment
+                        // Note: Using --user to avoid needing venv in container
                         sh """
-                            python3 -m venv .venv
-                            . .venv/bin/activate
-                            pip install boto3
-                            python scripts/deployment/deploy-f1-platform.py \
+                            pip install --user boto3
+                            python3 scripts/deployment/deploy-f1-platform.py \
                                 --environment ${params.ENVIRONMENT} \
                                 --region ${env.AWS_REGION} \
                                 --monitoring-level ${params.MONITORING_LEVEL}
@@ -243,8 +242,7 @@ pipeline {
                     try {
                         // Run validation script
                         sh """
-                            . .venv/bin/activate
-                            python scripts/deployment/validate-infrastructure.py \
+                            python3 scripts/deployment/validate-infrastructure.py \
                                 --environment ${params.ENVIRONMENT} \
                                 --region ${env.AWS_REGION}
                         """

@@ -5,6 +5,31 @@
  * Replaces Slack with Discord webhooks
  */
 
+@NonCPS
+def sendDiscordNotification(script, webhookUrl, Map config) {
+    def status = config.status ?: 'UNKNOWN'
+    def message = config.message ?: 'Pipeline notification'
+    def color = getColorForStatus(status)
+    def emoji = getEmojiForStatus(status)
+    
+    def payload = [
+        content: "${emoji} **${message}**",
+        embeds: [[
+            title: config.title ?: "F1 Data Platform Pipeline",
+            description: config.description ?: "",
+            color: color,
+            fields: buildFields(config),
+            timestamp: new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", TimeZone.getTimeZone('UTC')),
+            footer: [
+                text: "Jenkins CI/CD",
+                icon_url: "https://www.jenkins.io/images/logos/jenkins/jenkins.png"
+            ]
+        ]]
+    ]
+    
+    sendWebhook(script, webhookUrl, payload)
+}
+
 class DiscordNotifier implements Serializable {
     def script
     def webhookUrl
@@ -198,7 +223,7 @@ class DiscordNotifier implements Serializable {
      */
     private void sendWebhook(Map payload) {
         try {
-            def jsonPayload = script.groovy.json.JsonOutput.toJson(payload)
+            def jsonPayload = groovy.json.JsonOutput.toJson(payload)
             
             script.sh """
                 curl -X POST '${webhookUrl}' \\
