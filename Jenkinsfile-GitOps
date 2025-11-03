@@ -38,6 +38,9 @@ pipeline {
         
         // GitHub Token
         GITHUB_TOKEN = credentials('github-credentials')
+        
+        // SonarQube Token
+        SONARQUBE_TOKEN = credentials('sonarqube-token')
     }
     
     parameters {
@@ -88,9 +91,9 @@ pipeline {
         stage('📋 Initialize') {
             steps {
                 script {
-                    // Load Discord notifier class
-                    def DiscordNotifierClass = load 'ci/shared-libraries/discordNotifier.groovy'
-                    discordNotifier = DiscordNotifierClass.newInstance(this, env.DISCORD_WEBHOOK_URL)
+                    // Load shared libraries
+                    discord = load 'ci/shared-libraries/discordNotifier.groovy'
+                    discordNotifier = discord.newInstance(this, env.DISCORD_WEBHOOK_URL)
                     
                     // Send deployment started notification
                     discordNotifier.notifyDeploymentStarted([
@@ -125,12 +128,12 @@ pipeline {
                     try {
                         // Run SonarQube analysis
                         withSonarQubeEnv('SonarQube') {
-                            sh """
-                                sonar-scanner \
-                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} \
-                                    -Dsonar.projectName="F1 Data Platform" \
-                                    -Dsonar.projectVersion=${BUILD_VERSION} \
-                                    -Dsonar.sources=infrastructure,scripts/deployment \
+                            bat """
+                                sonar-scanner ^
+                                    -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} ^
+                                    -Dsonar.projectName="F1 Data Platform" ^
+                                    -Dsonar.projectVersion=${BUILD_VERSION} ^
+                                    -Dsonar.sources=infrastructure,scripts/deployment ^
                                     -Dsonar.exclusions=**/*.pyc,**/__pycache__/**,.venv/**
                             """
                         }
@@ -169,9 +172,9 @@ pipeline {
             steps {
                 script {
                     try {
-                        sh """
-                            aws cloudformation validate-template \
-                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml \
+                        bat """
+                            aws cloudformation validate-template ^
+                                --template-body file://infrastructure/aws/cloudformation/01-data-lake-foundation-fixed.yaml ^
                                 --region ${env.AWS_REGION}
                         """
                         
@@ -195,12 +198,11 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Create Python virtual environment and run deployment
+                        // Install required Python packages and run deployment
+                        // Note: Using --user to avoid needing venv in container
                         sh """
-                            python3 -m venv .venv
-                            . .venv/bin/activate
-                            pip install boto3
-                            python scripts/deployment/deploy-f1-platform.py \
+                            pip install --user boto3
+                            python3 scripts/deployment/deploy-f1-platform.py \
                                 --environment ${params.ENVIRONMENT} \
                                 --region ${env.AWS_REGION} \
                                 --monitoring-level ${params.MONITORING_LEVEL}
@@ -243,8 +245,7 @@ pipeline {
                     try {
                         // Run validation script
                         sh """
-                            . .venv/bin/activate
-                            python scripts/deployment/validate-infrastructure.py \
+                            python3 scripts/deployment/validate-infrastructure.py \
                                 --environment ${params.ENVIRONMENT} \
                                 --region ${env.AWS_REGION}
                         """
@@ -296,78 +297,52 @@ pipeline {
     post {
         success {
             script {
-                try {
-                    if (binding.hasVariable('discordNotifier')) {
-                        discordNotifier.notify([
-                            status: 'SUCCESS',
-                            title: '🎉 Pipeline Completed Successfully',
-                            description: "F1 Data Platform deployed to ${params.ENVIRONMENT}",
-                            fields: [
-                                [name: 'Environment', value: params.ENVIRONMENT, inline: true],
-                                [name: 'Duration', value: currentBuild.durationString, inline: true],
-                                [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
-                                [name: 'Build URL', value: env.BUILD_URL, inline: false]
-                            ]
-                        ])
-                    }
-                } catch (Exception e) {
-                    echo "Failed to send Discord notification: ${e.message}"
-                }
+                discordNotifier.notify([
+                    status: 'SUCCESS',
+                    title: '🎉 Pipeline Completed Successfully',
+                    description: "F1 Data Platform deployed to ${params.ENVIRONMENT}",
+                    fields: [
+                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                        [name: 'Duration', value: currentBuild.durationString, inline: true],
+                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                        [name: 'Build URL', value: env.BUILD_URL, inline: false]
+                    ]
+                ])
             }
         }
         failure {
             script {
-                try {
-                    if (binding.hasVariable('discordNotifier')) {
-                        discordNotifier.notify([
-                            status: 'FAILURE',
-                            title: '💥 Pipeline Failed',
-                            description: "F1 Data Platform deployment to ${params.ENVIRONMENT} failed",
-                            fields: [
-                                [name: 'Environment', value: params.ENVIRONMENT, inline: true],
-                                [name: 'Failed Stage', value: env.STAGE_NAME ?: 'Unknown', inline: true],
-                                [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
-                                [name: 'Build URL', value: env.BUILD_URL, inline: false],
-                                [name: 'Console Output', value: "${env.BUILD_URL}console", inline: false]
-                            ]
-                        ])
-                    } else {
-                        echo "Discord notifier not initialized, skipping notification"
-                    }
-                } catch (Exception e) {
-                    echo "Failed to send Discord notification: ${e.message}"
-                }
+                discordNotifier.notify([
+                    status: 'FAILURE',
+                    title: '💥 Pipeline Failed',
+                    description: "F1 Data Platform deployment to ${params.ENVIRONMENT} failed",
+                    fields: [
+                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                        [name: 'Failed Stage', value: env.STAGE_NAME ?: 'Unknown', inline: true],
+                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                        [name: 'Build URL', value: env.BUILD_URL, inline: false],
+                        [name: 'Console Output', value: "${env.BUILD_URL}console", inline: false]
+                    ]
+                ])
             }
         }
         unstable {
             script {
-                try {
-                    if (binding.hasVariable('discordNotifier')) {
-                        discordNotifier.notify([
-                            status: 'UNSTABLE',
-                            title: '⚠️ Pipeline Unstable',
-                            description: "F1 Data Platform deployment completed with warnings",
-                            fields: [
-                                [name: 'Environment', value: params.ENVIRONMENT, inline: true],
-                                [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
-                                [name: 'Build URL', value: env.BUILD_URL, inline: false]
-                            ]
-                        ])
-                    }
-                } catch (Exception e) {
-                    echo "Failed to send Discord notification: ${e.message}"
-                }
+                discordNotifier.notify([
+                    status: 'UNSTABLE',
+                    title: '⚠️ Pipeline Unstable',
+                    description: "F1 Data Platform deployment completed with warnings",
+                    fields: [
+                        [name: 'Environment', value: params.ENVIRONMENT, inline: true],
+                        [name: 'Build Number', value: "#${env.BUILD_NUMBER}", inline: true],
+                        [name: 'Build URL', value: env.BUILD_URL, inline: false]
+                    ]
+                ])
             }
         }
         always {
-            script {
-                try {
-                    // Cleanup - only if inside a node block
-                    echo "Build completed"
-                } catch (Exception e) {
-                    echo "Cleanup error: ${e.message}"
-                }
-            }
+            // Cleanup
+            cleanWs(deleteDirs: true)
         }
     }
 }
@@ -377,7 +352,7 @@ pipeline {
 def getDeployedStacks(environment) {
     def stacks = []
     try {
-        def output = sh(
+        def output = bat(
             script: "aws cloudformation list-stacks --region ${env.AWS_REGION} --query \"StackSummaries[?StackStatus!='DELETE_COMPLETE' && contains(StackName, '${environment}')].StackName\" --output json",
             returnStdout: true
         ).trim()
@@ -394,7 +369,7 @@ def getStackResources(environment) {
     try {
         def stacks = getDeployedStacks(environment)
         stacks.each { stackName ->
-            def output = sh(
+            def output = bat(
                 script: "aws cloudformation describe-stack-resources --stack-name ${stackName} --region ${env.AWS_REGION} --query \"StackResources[].ResourceType\" --output json",
                 returnStdout: true
             ).trim()
