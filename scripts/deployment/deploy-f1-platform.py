@@ -195,9 +195,9 @@ def main():
     deployer.create_deployment_bucket(bucket_name)
     
     # Define deployment configuration
-    # Use fixed template for foundation (circular dependency fix), rest from showcase repo
-    gitops_template_dir = Path("C:/scripts/f1-gitops/infrastructure/aws/cloudformation")
-    showcase_template_dir = Path("C:/scripts/showcase-f1-pipeline/config/cloudformation")
+    # Use relative paths from repository root (works in both Windows and Linux)
+    gitops_template_dir = Path(__file__).parent.parent.parent / "infrastructure" / "aws" / "cloudformation"
+    showcase_template_dir = Path("C:/scripts/showcase-f1-pipeline/config/cloudformation")  # External repo - keep as is for now
     
     stacks = [
         {

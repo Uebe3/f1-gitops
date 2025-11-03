@@ -372,11 +372,14 @@ def getDeployedStacks(environment) {
     def stacks = []
     try {
         def output = sh(
-            script: "aws cloudformation list-stacks --region ${env.AWS_REGION} --query \"StackSummaries[?StackStatus!='DELETE_COMPLETE' && contains(StackName, '${environment}')].StackName\" --output json",
+            script: "aws cloudformation list-stacks --region ${env.AWS_REGION} --query \"StackSummaries[?StackStatus!='DELETE_COMPLETE' && contains(StackName, '${environment}')].StackName\" --output text",
             returnStdout: true
         ).trim()
         
-        stacks = readJSON(text: output)
+        // Parse text output (space-separated values)
+        if (output) {
+            stacks = output.split(/\s+/).collect { it.trim() }.findAll { it }
+        }
     } catch (Exception e) {
         echo "Warning: Could not retrieve stack list: ${e.message}"
     }
@@ -389,12 +392,15 @@ def getStackResources(environment) {
         def stacks = getDeployedStacks(environment)
         stacks.each { stackName ->
             def output = sh(
-                script: "aws cloudformation describe-stack-resources --stack-name ${stackName} --region ${env.AWS_REGION} --query \"StackResources[].ResourceType\" --output json",
+                script: "aws cloudformation describe-stack-resources --stack-name ${stackName} --region ${env.AWS_REGION} --query \"StackResources[].ResourceType\" --output text",
                 returnStdout: true
             ).trim()
             
-            def stackResources = readJSON(text: output)
-            resources.addAll(stackResources)
+            // Parse text output (tab/space-separated values)
+            if (output) {
+                def stackResources = output.split(/[\s\t]+/).collect { it.trim() }.findAll { it }
+                resources.addAll(stackResources)
+            }
         }
     } catch (Exception e) {
         echo "Warning: Could not retrieve resource list: ${e.message}"
