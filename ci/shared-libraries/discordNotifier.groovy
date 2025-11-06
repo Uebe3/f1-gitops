@@ -225,11 +225,15 @@ class DiscordNotifier implements Serializable {
         try {
             def jsonPayload = groovy.json.JsonOutput.toJson(payload)
             
-            script.sh """
-                curl -X POST '${webhookUrl}' \\
+            // Write payload to file to avoid shell escaping issues
+            script.writeFile file: 'discord-payload.json', text: jsonPayload
+            
+            // Use curl with file input to avoid exposing webhook URL in logs
+            script.sh '''
+                curl -X POST "${DISCORD_WEBHOOK_URL}" \\
                      -H 'Content-Type: application/json' \\
-                     -d '${jsonPayload}'
-            """
+                     -d @discord-payload.json
+            '''
         } catch (Exception e) {
             script.echo "Failed to send Discord notification: ${e.message}"
             // Don't fail the build if notification fails

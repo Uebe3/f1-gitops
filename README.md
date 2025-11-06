@@ -1,7 +1,6 @@
 # F1 Data Platform - GitOps CI/CD Pipeline
 
 A comprehensive Jenkins-based CI/CD pipeline for deploying F1 data platform infrastructure and applications using configuration-driven GitOps practices.
-Still WIP, currently working on the AWS deployments and reorganizing between this repo and the f1-data-platform to determine which should handle infrastructure.
 
 ## Overview
 

@@ -31,6 +31,19 @@ class CloudFormationDeployer:
             # Check if bucket exists
             self.s3_client.head_bucket(Bucket=bucket_name)
             print(f"✓ Deployment bucket '{bucket_name}' already exists")
+            
+            # Enable versioning if not already enabled
+            try:
+                versioning = self.s3_client.get_bucket_versioning(Bucket=bucket_name)
+                if versioning.get('Status') != 'Enabled':
+                    self.s3_client.put_bucket_versioning(
+                        Bucket=bucket_name,
+                        VersioningConfiguration={'Status': 'Enabled'}
+                    )
+                    print(f"✓ Enabled versioning on bucket '{bucket_name}'")
+            except Exception as e:
+                print(f"⚠️  Could not enable versioning: {str(e)}")
+                
         except:
             # Create bucket
             if self.region == 'us-east-1':
@@ -40,7 +53,13 @@ class CloudFormationDeployer:
                     Bucket=bucket_name,
                     CreateBucketConfiguration={'LocationConstraint': self.region}
                 )
-            print(f"✓ Created deployment bucket: {bucket_name}")
+            
+            # Enable versioning on new bucket
+            self.s3_client.put_bucket_versioning(
+                Bucket=bucket_name,
+                VersioningConfiguration={'Status': 'Enabled'}
+            )
+            print(f"✓ Created deployment bucket with versioning: {bucket_name}")
             
         return bucket_name
     
@@ -77,14 +96,27 @@ class CloudFormationDeployer:
         
         try:
             if stack_exists:
-                print(f"📝 Updating stack: {stack_name}")
-                self.cf_client.update_stack(
-                    StackName=stack_name,
-                    TemplateURL=template_url,
-                    Parameters=cf_parameters,
-                    Capabilities=capabilities or []
-                )
-            else:
+                # Check if we need to recreate the stack due to parameter changes
+                if self._needs_recreation(stack_name, parameters):
+                    print(f"🔄 Stack parameters changed - deleting and recreating: {stack_name}")
+                    self._delete_stack(stack_name)
+                    stack_exists = False
+                else:
+                    print(f"📝 Updating stack: {stack_name}")
+                    try:
+                        self.cf_client.update_stack(
+                            StackName=stack_name,
+                            TemplateURL=template_url,
+                            Parameters=cf_parameters,
+                            Capabilities=capabilities or []
+                        )
+                    except Exception as e:
+                        if "No updates are to be performed" in str(e):
+                            print(f"ℹ️  Stack {stack_name} is already up to date")
+                            return True
+                        raise
+            
+            if not stack_exists:
                 print(f"🚀 Creating stack: {stack_name}")
                 self.cf_client.create_stack(
                     StackName=stack_name,
@@ -97,7 +129,21 @@ class CloudFormationDeployer:
             return self._wait_for_stack_operation(stack_name)
             
         except Exception as e:
-            print(f"❌ Failed to deploy {stack_name}: {str(e)}")
+            error_msg = str(e)
+            # Handle parameter mismatch errors
+            if "do not exist in the template" in error_msg:
+                print(f"⚠️  Parameter mismatch detected - recreating stack: {stack_name}")
+                self._delete_stack(stack_name)
+                print(f"🚀 Creating stack: {stack_name}")
+                self.cf_client.create_stack(
+                    StackName=stack_name,
+                    TemplateURL=template_url,
+                    Parameters=cf_parameters,
+                    Capabilities=capabilities or []
+                )
+                return self._wait_for_stack_operation(stack_name)
+            
+            print(f"❌ Failed to deploy {stack_name}: {error_msg}")
             return False
     
     def _stack_exists(self, stack_name: str) -> bool:
@@ -107,6 +153,57 @@ class CloudFormationDeployer:
             stack_status = response['Stacks'][0]['StackStatus']
             return stack_status not in ['DELETE_COMPLETE']
         except:
+            return False
+    
+    def _needs_recreation(self, stack_name: str, new_parameters: Dict[str, str]) -> bool:
+        """Check if stack needs recreation due to parameter changes."""
+        try:
+            response = self.cf_client.describe_stacks(StackName=stack_name)
+            existing_params = {p['ParameterKey']: p['ParameterValue'] 
+                             for p in response['Stacks'][0].get('Parameters', [])}
+            
+            # Check if new parameters exist in the current stack
+            new_param_keys = set(new_parameters.keys())
+            existing_param_keys = set(existing_params.keys())
+            
+            # If there are new parameters that don't exist in the stack, we need to recreate
+            if new_param_keys - existing_param_keys:
+                print(f"ℹ️  New parameters detected: {new_param_keys - existing_param_keys}")
+                return True
+                
+            return False
+        except Exception as e:
+            print(f"⚠️  Could not check stack parameters: {str(e)}")
+            return False
+    
+    def _delete_stack(self, stack_name: str) -> bool:
+        """Delete a CloudFormation stack."""
+        try:
+            print(f"🗑️  Deleting stack: {stack_name}")
+            self.cf_client.delete_stack(StackName=stack_name)
+            
+            # Wait for deletion to complete
+            print(f"⏳ Waiting for stack deletion to complete...")
+            while True:
+                try:
+                    response = self.cf_client.describe_stacks(StackName=stack_name)
+                    status = response['Stacks'][0]['StackStatus']
+                    if status == 'DELETE_COMPLETE':
+                        print(f"✅ Stack {stack_name} deleted successfully")
+                        return True
+                    elif 'DELETE' in status:
+                        print(f"⏳ Deletion in progress: {status}")
+                        time.sleep(30)
+                    else:
+                        print(f"⚠️  Unexpected status during deletion: {status}")
+                        time.sleep(30)
+                except self.cf_client.exceptions.ClientError as e:
+                    if 'does not exist' in str(e):
+                        print(f"✅ Stack {stack_name} deleted successfully")
+                        return True
+                    raise
+        except Exception as e:
+            print(f"❌ Failed to delete stack {stack_name}: {str(e)}")
             return False
     
     def _wait_for_stack_operation(self, stack_name: str) -> bool:

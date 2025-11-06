@@ -206,9 +206,12 @@ class InfrastructureValidator:
         """Validate IAM roles exist"""
         print("\n🔐 Validating IAM Resources...")
         
+        # Use correct role names from CloudFormation template
+        # Pattern: ${ProjectName}-{service}-role-${Environment}
         expected_roles = [
-            f'f1-glue-execution-role-{self.environment}',
-            f'f1-lambda-execution-role-{self.environment}'
+            f'f1-data-platform-glue-role-{self.environment}',
+            f'f1-data-platform-lambda-role-{self.environment}',
+            f'f1-data-platform-athena-role-{self.environment}'
         ]
         
         for role_name in expected_roles:

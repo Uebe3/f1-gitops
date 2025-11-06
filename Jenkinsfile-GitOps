@@ -92,8 +92,8 @@ pipeline {
             steps {
                 script {
                     // Load shared libraries
-                    discord = load 'ci/shared-libraries/discordNotifier.groovy'
-                    discordNotifier = discord.newInstance(this, env.DISCORD_WEBHOOK_URL)
+                    def discord = load 'ci/shared-libraries/discordNotifier.groovy'
+                    def discordNotifier = discord.newInstance(this, env.DISCORD_WEBHOOK_URL)
                     
                     // Send deployment started notification
                     discordNotifier.notifyDeploymentStarted([
