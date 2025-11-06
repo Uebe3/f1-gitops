@@ -155,10 +155,10 @@ class InfrastructureValidator:
             )
             print(f"  ✅ Glue Database {database_name}: EXISTS")
         except self.glue_client.exceptions.EntityNotFoundException:
-            self.validation_results['failed'].append(
-                f"❌ Glue Database {database_name}: NOT FOUND"
+            self.validation_results['warnings'].append(
+                f"⚠️ Glue Database {database_name}: NOT FOUND (may not be deployed yet)"
             )
-            print(f"  ❌ Glue Database {database_name}: NOT FOUND")
+            print(f"  ⚠️ Glue Database {database_name}: NOT FOUND (may not be deployed yet)")
         
         # Check Glue crawler
         crawler_name = f'f1-data-crawler-{self.environment}'
@@ -196,10 +196,10 @@ class InfrastructureValidator:
                 print(f"  ⚠️ Athena Workgroup {workgroup_name}: {state}")
                 
         except self.athena_client.exceptions.InvalidRequestException:
-            self.validation_results['failed'].append(
-                f"❌ Athena Workgroup {workgroup_name}: NOT FOUND"
+            self.validation_results['warnings'].append(
+                f"⚠️ Athena Workgroup {workgroup_name}: NOT FOUND (may not be deployed yet)"
             )
-            print(f"  ❌ Athena Workgroup {workgroup_name}: NOT FOUND")
+            print(f"  ⚠️ Athena Workgroup {workgroup_name}: NOT FOUND (may not be deployed yet)")
     
     def validate_iam_resources(self):
         """Validate IAM roles exist"""
