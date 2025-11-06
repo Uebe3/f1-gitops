@@ -146,8 +146,8 @@ class InfrastructureValidator:
         """Validate Glue databases and crawlers"""
         print("\n🔍 Validating Glue Resources...")
         
-        # Check Glue database
-        database_name = f'f1_data_platform_{self.environment}'
+        # Check Glue database - use correct naming from CloudFormation template
+        database_name = f'f1-data-platform_{self.environment}'
         try:
             self.glue_client.get_database(Name=database_name)
             self.validation_results['passed'].append(
@@ -155,10 +155,10 @@ class InfrastructureValidator:
             )
             print(f"  ✅ Glue Database {database_name}: EXISTS")
         except self.glue_client.exceptions.EntityNotFoundException:
-            self.validation_results['warnings'].append(
-                f"⚠️ Glue Database {database_name}: NOT FOUND (may not be deployed yet)"
+            self.validation_results['failed'].append(
+                f"❌ Glue Database {database_name}: NOT FOUND"
             )
-            print(f"  ⚠️ Glue Database {database_name}: NOT FOUND (may not be deployed yet)")
+            print(f"  ❌ Glue Database {database_name}: NOT FOUND")
         
         # Check Glue crawler
         crawler_name = f'f1-data-crawler-{self.environment}'
@@ -179,7 +179,8 @@ class InfrastructureValidator:
         """Validate Athena workgroups"""
         print("\n📊 Validating Athena Resources...")
         
-        workgroup_name = f'f1-platform-workgroup-{self.environment}'
+        # Use correct workgroup name from CloudFormation template
+        workgroup_name = f'f1-data-platform-{self.environment}'
         try:
             response = self.athena_client.get_work_group(WorkGroup=workgroup_name)
             state = response['WorkGroup']['State']
@@ -196,10 +197,10 @@ class InfrastructureValidator:
                 print(f"  ⚠️ Athena Workgroup {workgroup_name}: {state}")
                 
         except self.athena_client.exceptions.InvalidRequestException:
-            self.validation_results['warnings'].append(
-                f"⚠️ Athena Workgroup {workgroup_name}: NOT FOUND (may not be deployed yet)"
+            self.validation_results['failed'].append(
+                f"❌ Athena Workgroup {workgroup_name}: NOT FOUND"
             )
-            print(f"  ⚠️ Athena Workgroup {workgroup_name}: NOT FOUND (may not be deployed yet)")
+            print(f"  ❌ Athena Workgroup {workgroup_name}: NOT FOUND")
     
     def validate_iam_resources(self):
         """Validate IAM roles exist"""
